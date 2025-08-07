@@ -2,6 +2,8 @@
 
 A comprehensive, production-ready TikTok scraping library using Selenium WebDriver with advanced network monitoring, comment extraction, and batch processing capabilities.
 
+Disclaimer: Before you ask, yes, this is made with AI, it has issues but it works (more or less). you may also find weird comments or code.
+
 ## 🚀 **Key Features**
 
 - **Advanced Network Monitoring**: Chrome DevTools Protocol (CDP) integration for real-time API request capture
@@ -485,3 +487,4 @@ Contributions welcome! Priority areas:
 **⚠️ Disclaimer**: This tool is not affiliated with TikTok. Use responsibly and at your own risk. The authors are not responsible for any misuse or legal consequences resulting from the use of this software.
 
 **🔒 Privacy**: Always respect user privacy and data protection laws when collecting data from social media platforms.
+
