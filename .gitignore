@@ -1,0 +1,45 @@
+# Python / venv
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
+pip-selfcheck.json
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Output files
+*.json
+!package.json
+!package-lock.json
+*.csv
+*.xlsx
+*.txt
+
+# Browser profile data
+browser_profiles/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+test_*.py

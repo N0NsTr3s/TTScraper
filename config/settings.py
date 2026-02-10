@@ -18,18 +18,14 @@ class BrowserConfig:
     
     def __post_init__(self):
         if self.user_data_dir is None:
-            self.user_data_dir = os.getcwd()
+            # Anchor to the project root (parent of config/) so every
+            # script resolves the same directory regardless of cwd.
+            _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.user_data_dir = os.path.join(_project_root, "browser_profiles")
         if self.disable_blink_features is None:
-            self.disable_blink_features = ["AutomationControlled"]
+            self.disable_blink_features = []
         if self.chrome_args is None:
-            self.chrome_args = [
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-extensions",
-                "--no-first-run",
-                "--disable-default-apps"
-            ]
+            self.chrome_args = []
 
 
 @dataclass 

@@ -24,8 +24,8 @@ def extract_video_id_from_url(url, headers=None, proxy=None):
             "https://www.tiktok.com/@therock/video/6829267836783971589"
         )
     
-def requests_cookie_to_selenium_cookie(req_c):
-    # Accepts a dictionary as returned by driver.get_cookies()
+def requests_cookie_to_browser_cookie(req_c):
+    """Convert a requests/browser cookie dict to a standardized cookie dict."""
     return {
         'name': req_c.get('name'),
         'value': req_c.get('value'),
@@ -35,3 +35,6 @@ def requests_cookie_to_selenium_cookie(req_c):
         'secure': req_c.get('secure'),
         'httpOnly': req_c.get('httpOnly', False)
     }
+
+# Backward compat alias
+requests_cookie_to_selenium_cookie = requests_cookie_to_browser_cookie

@@ -1,14 +1,22 @@
 """
 Comment Extraction Example
 
-This example demonstrates how to extract comments from TikTok videos
-using advanced network monitoring and organize them with replies.
+Extracts all comments **and replies** (with user details) from a TikTok video
+using TikTok's comment APIs captured via CDP network interception.
+
+Phase 1 – captures ``/api/comment/list/``  (top-level comments)
+Phase 2 – captures ``/api/comment/list/reply/`` (reply threads)
+
+Uses nodriver (async CDP).
 """
 
+import asyncio
 import logging
 import sys
 import os
 import json
+import re
+import traceback
 from datetime import datetime
 
 # Add parent directory to path
@@ -18,405 +26,274 @@ from TTScraper import TTScraper
 from video import Video
 
 
+# ── Logging ──────────────────────────────────────────────────────────
+
 def setup_logging():
     """Setup logging configuration."""
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
             logging.FileHandler('comment_extraction.log', encoding='utf-8')
-
         ]
     )
     return logging.getLogger("CommentExtraction")
 
 
-def extract_comments_network(video_url, driver):
+# ── Extraction ───────────────────────────────────────────────────────
+
+async def extract_comments_api(video_url, tab, fetch_replies=True):
     """
-    Extract comments using network monitoring approach.
-    
-    Args:
-        video_url (str): The TikTok video URL
-        driver: Selenium WebDriver instance
-        
-    Returns:
-        list: List of comment API responses
+    Extract comments + replies via CDP network capture of TikTok's
+    ``/api/comment/list/`` and ``/api/comment/list/reply/`` endpoints.
+
+    Returns ``(raw_comments, parsed_comments)`` where *parsed_comments*
+    is a flat list containing both top-level comments and replies
+    (replies have ``is_reply=True`` and ``parent_comment_id`` set).
     """
     logger = logging.getLogger("CommentExtraction")
-    
+
     try:
-        logger.info(f"💬 Extracting comments using network monitoring: {video_url}")
-        
-        # Create Video instance
-        video = Video(url=video_url, driver=driver)
-        
-        # Use network monitoring to capture comment API requests
-        logger.info("🕸️ Starting network monitoring for comment extraction...")
-        comment_responses = video.fetch_comments_from_network(driver=driver)
-        
-        logger.info(f"✅ Network monitoring completed. Captured {len(comment_responses)} API responses")
-        
-        if not comment_responses:
-            logger.warning("⚠️ No comments found in network responses")
-            return []
-        return comment_responses
-        
+        logger.info(f"💬 Extracting comments via CDP capture: {video_url}")
+        video = Video(url=video_url, tab=tab)
+
+        # fetch_comments now handles both phases internally
+        raw_comments = await video.fetch_comments(
+            tab=tab,
+            fetch_replies=fetch_replies,
+        )
+
+        if not raw_comments:
+            logger.warning("⚠️  No comments returned from API")
+            return [], []
+
+        logger.info(f"✅ Fetched {len(raw_comments)} raw items (comments + replies)")
+
+        # Parse into clean flat records with user details
+        parsed = video.parse_comments(raw_comments)
+        logger.info(f"✅ Parsed {len(parsed)} records")
+
+        return raw_comments, parsed
+
     except Exception as e:
-        logger.error(f"❌ Error in network comment extraction: {e}")
-        return []
+        logger.error(f"❌ Error in comment extraction: {e}", exc_info=True)
+        return [], []
 
 
-def process_comment_responses(video_url, driver):
-    """
-    Process and organize comment responses from API.
-    
-    Args:
-        video_url (str): The TikTok video URL
-        driver: Selenium WebDriver instance
-        
-    Returns:
-        dict: Organized comment data
-    """
-    logger = logging.getLogger("CommentExtraction")
-    
-    try:
-        # Create Video instance
-        video = Video(url=video_url, driver=driver)
-        
-        # Read and process all API responses
-        logger.info("📖 Reading and processing API responses...")
-        all_comments = video.read_all_api_responses(driver=driver)
-        
-        if not all_comments:
-            logger.warning("⚠️ No comments found in API responses")
-            return {'comments': [], 'total': 0, 'success': False}
-        
-        # Organize comments with replies
-        logger.info("🗂️ Organizing comments with reply structure...")
-        organized_comments = video.get_comments_with_replies(driver=driver)
-        
-        return organized_comments
-        
-    except Exception as e:
-        logger.error(f"❌ Error processing comment responses: {e}")
-        return {'comments': [], 'total': 0, 'success': False, 'error': str(e)}
+# ── Structuring helpers ──────────────────────────────────────────────
 
+def group_comments_with_replies(parsed_comments):
+    """
+    Group a flat list of parsed records into a list of top-level comment
+    dicts, each with a ``replies`` sub-list containing its child replies.
 
-def extract_traditional_comments(video_url, driver):
+    Returns ``(grouped, orphan_replies)`` where *orphan_replies* are
+    replies whose parent comment was not found (e.g. deleted/hidden).
     """
-    Extract comments using traditional scrolling method.
-    
-    Args:
-        video_url (str): The TikTok video URL
-        driver: Selenium WebDriver instance
-        
-    Returns:
-        list: List of comment objects
-    """
-    logger = logging.getLogger("CommentExtraction")
-    
-    try:
-        logger.info(f"📜 Extracting comments using traditional scrolling: {video_url}")
-        
-        # Create Video instance
-        video = Video(url=video_url, driver=driver)
-        
-        # Use safe_comments method for traditional extraction
-        comments = []
-        try:
-            comment_generator = video.safe_comments(driver=driver)
-            for comment in comment_generator:
-                comments.append(comment)
-                
-                # Limit to prevent infinite scrolling
-                if len(comments) >= 100:
-                    break
-                    
-        except Exception as comment_error:
-            logger.warning(f"⚠️ Error in traditional comment extraction: {comment_error}")
-        
-        logger.info(f"✅ Traditional extraction completed. Found {len(comments)} comments")
-        return comments
-        
-    except Exception as e:
-        logger.error(f"❌ Error in traditional comment extraction: {e}")
-        return []
+    top_level = []
+    replies = []
 
-
-def analyze_comments(comments_data):
-    """
-    Perform basic analysis on extracted comments.
-    
-    Args:
-        comments_data (dict or list): Comment data to analyze
-        
-    Returns:
-        dict: Analysis results
-    """
-    logger = logging.getLogger("CommentExtraction")
-    
-    try:
-        # Handle different data structures
-        if isinstance(comments_data, dict):
-            if 'comments' in comments_data:
-                comments = comments_data['comments']
-            else:
-                comments = []
+    for c in parsed_comments:
+        if c.get("is_reply"):
+            replies.append(c)
         else:
-            comments = comments_data
-        
-        if not comments:
-            return {'total_comments': 0, 'analysis': 'No comments to analyze'}
-        
-        analysis = {
-            'total_comments': len(comments),
-            'comments_with_replies': 0,
-            'total_replies': 0,
-            'top_liked_comments': [],
-            'recent_comments': [],
-            'comment_lengths': [],
-            'authors': set()
-        }
-        
-        for comment in comments:
-            # Handle different comment structures
-            if isinstance(comment, dict):
-                # Count replies
-                replies = comment.get('replies', [])
-                if replies:
-                    analysis['comments_with_replies'] += 1
-                    analysis['total_replies'] += len(replies)
-                
-                # Track comment text length
-                text = comment.get('text', '')
-                if text:
-                    analysis['comment_lengths'].append(len(text))
-                
-                # Track authors
-                author_info = comment.get('author_info', {}) or comment.get('user', {})
-                if author_info:
-                    author_name = author_info.get('username') or author_info.get('uniqueId')
-                    if author_name:
-                        analysis['authors'].add(author_name)
-                
-                # Top liked comments
-                likes = comment.get('digg_count', 0) or comment.get('likes', 0)
-                if likes:
-                    analysis['top_liked_comments'].append({
-                        'text': text[:100] + '...' if len(text) > 100 else text,
-                        'likes': likes,
-                        'author': author_info.get('username', 'Unknown') if author_info else 'Unknown'
-                    })
-        
-        # Sort top liked comments
-        analysis['top_liked_comments'].sort(key=lambda x: x['likes'], reverse=True)
-        analysis['top_liked_comments'] = analysis['top_liked_comments'][:5]
-        
-        # Calculate averages
-        if analysis['comment_lengths']:
-            analysis['average_comment_length'] = sum(analysis['comment_lengths']) / len(analysis['comment_lengths'])
-        
-        analysis['unique_authors'] = len(analysis['authors'])
-        analysis['authors'] = list(analysis['authors'])  # Convert set to list for JSON serialization
-        
-        logger.info(f"📊 Comment analysis completed:")
-        logger.info(f"   Total comments: {analysis['total_comments']}")
-        logger.info(f"   Comments with replies: {analysis['comments_with_replies']}")
-        logger.info(f"   Total replies: {analysis['total_replies']}")
-        logger.info(f"   Unique authors: {analysis['unique_authors']}")
-        
-        return analysis
-        
-    except Exception as e:
-        logger.error(f"❌ Error analyzing comments: {e}")
-        return {'error': str(e)}
+            top_level.append(c)
+
+    # Index top-level comments by comment_id
+    by_id = {c["comment_id"]: c for c in top_level}
+
+    # Attach a mutable replies list to each top-level comment
+    for c in top_level:
+        c["replies"] = []
+
+    orphan_replies = []
+    for r in replies:
+        parent_id = r.get("parent_comment_id")
+        if parent_id and parent_id in by_id:
+            by_id[parent_id]["replies"].append(r)
+        else:
+            orphan_replies.append(r)
+
+    return top_level, orphan_replies
 
 
-def save_comments_data(comments_data, video_url, method="network", filename=None):
+# ── Display helpers ──────────────────────────────────────────────────
+
+def display_parsed_comments(parsed_comments):
+    """Pretty-print parsed comments with nested replies."""
+    grouped, orphans = group_comments_with_replies(parsed_comments)
+
+    comment_num = 0
+    for c in grouped:
+        comment_num += 1
+        label = f" [{c['label_text']}]" if c.get("label_text") else ""
+        print(f"\n{'─' * 50}")
+        print(f"Comment {comment_num}:")
+        print(f"  User:      @{c.get('username') or '?'}{label} ({c.get('nickname') or '?'})")
+        print(f"  Profile:   {c.get('user_profile_url') or 'N/A'}")
+        print(f"  Text:      {c.get('text') or '(no text)'}")
+        print(f"  Time:      {c.get('create_time_formatted') or 'N/A'}")
+        print(f"  Likes:     {c.get('digg_count', 0):,}")
+        print(f"  Replies:   {c.get('reply_count', 0)}")
+        if c.get("has_images"):
+            print(f"  Images:    {len(c.get('image_urls', []))} attached")
+
+        for ri, r in enumerate(c.get("replies", []), 1):
+            rlabel = f" [{r['label_text']}]" if r.get("label_text") else ""
+            print(f"\n  ↳ Reply {ri}:")
+            print(f"    User:    @{r.get('username') or '?'}{rlabel} ({r.get('nickname') or '?'})")
+            print(f"    Profile: {r.get('user_profile_url') or 'N/A'}")
+            print(f"    Text:    {r.get('text') or '(no text)'}")
+            print(f"    Time:    {r.get('create_time_formatted') or 'N/A'}")
+            print(f"    Likes:   {r.get('digg_count', 0):,}")
+            if r.get("has_images"):
+                print(f"    Images:  {len(r.get('image_urls', []))} attached")
+
+    if orphans:
+        print(f"\n{'─' * 50}")
+        print(f"⚠️  {len(orphans)} orphan replies (parent comment not found):")
+        for r in orphans:
+            rlabel = f" [{r['label_text']}]" if r.get("label_text") else ""
+            print(f"  ↳ @{r.get('username') or '?'}{rlabel}: {(r.get('text') or '')[:80]}")
+
+
+def print_summary(parsed_comments):
+    """Print aggregate statistics for parsed comments."""
+    top_level = [c for c in parsed_comments if not c.get("is_reply")]
+    replies = [c for c in parsed_comments if c.get("is_reply")]
+
+    total_likes = sum(c.get("digg_count", 0) for c in parsed_comments)
+    unique_users = {c.get("username") for c in parsed_comments if c.get("username")}
+
+    # Top liked across all (comments + replies)
+    top = sorted(parsed_comments, key=lambda x: x.get("digg_count", 0), reverse=True)[:5]
+
+    print(f"\n{'=' * 60}")
+    print("📊 Summary")
+    print(f"   Top-level comments: {len(top_level)}")
+    print(f"   Replies:            {len(replies)}")
+    print(f"   Total items:        {len(parsed_comments)}")
+    print(f"   Unique authors:     {len(unique_users)}")
+    print(f"   Total likes:        {total_likes:,}")
+
+    if top and top[0].get("digg_count", 0) > 0:
+        print("\n   🏆 Top liked:")
+        for tc in top:
+            if tc.get("digg_count", 0) == 0:
+                break
+            kind = "↳" if tc.get("is_reply") else "💬"
+            label = f" [{tc['label_text']}]" if tc.get("label_text") else ""
+            text_preview = (tc["text"][:55] + "...") if len(tc.get("text", "")) > 55 else tc.get("text", "")
+            print(f"      {tc['digg_count']:>5,} ❤️  {kind} @{tc.get('username', '?')}{label}: {text_preview}")
+
+
+# ── File I/O ─────────────────────────────────────────────────────────
+
+def save_json(data, filename):
+    """Write *data* to a JSON file."""
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    logging.getLogger("CommentExtraction").info(f"💾 Saved → {filename}")
+
+
+def make_output_filename(video_url, label):
+    """Build a safe output filename from the video URL and a label."""
+    video_id = video_url.rstrip('/').split('/')[-1].split('?')[0]
+    video_id = re.sub(r'[<>:"/\\|?*]', '_', video_id) or 'unknown'
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"comments_{label}_{video_id}_{timestamp}.json"
+
+
+def build_structured_output(video_url, parsed_comments):
     """
-    Save comments data to JSON file.
-    
-    Args:
-        comments_data: The comments data to save
-        video_url (str): The source video URL
-        method (str): Extraction method used
-        filename (str): Optional custom filename
+    Build a nested JSON structure with replies grouped under their
+    parent comments, suitable for export.
     """
-    logger = logging.getLogger("CommentExtraction")
-    
-    if not filename:
-        # Extract video ID from URL for filename
-        video_id = video_url.split('/')[-1] if '/' in video_url else 'unknown'
-        # Remove URL parameters and sanitize filename
-        video_id = video_id.split('?')[0]  # Remove query parameters
-        # Sanitize filename by removing invalid characters
-        import re
-        video_id = re.sub(r'[<>:"/\\|?*]', '_', video_id)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"comments_{method}_{video_id}_{timestamp}.json"
-    
-    try:
-        # Create comprehensive save data
-        save_data = {
-            'extraction_timestamp': datetime.now().isoformat(),
-            'video_url': video_url,
-            'extraction_method': method,
-            'comments_data': comments_data,
-            'total_comments': len(comments_data) if isinstance(comments_data, list) else 0,
+    grouped, orphans = group_comments_with_replies(parsed_comments)
 
-        }
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(save_data, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"💾 Comments data saved to: {filename}")
-        return filename
-        
-    except Exception as e:
-        logger.error(f"❌ Error saving comments data: {e}")
-        return None
+    top_level = [c for c in parsed_comments if not c.get("is_reply")]
+    replies = [c for c in parsed_comments if c.get("is_reply")]
+
+    return {
+        "video_url": video_url,
+        "extracted_at": datetime.now().isoformat(),
+        "extraction_method": "cdp_network_capture",
+        "stats": {
+            "total_comments": len(top_level),
+            "total_replies": len(replies),
+            "total_items": len(parsed_comments),
+            "orphan_replies": len(orphans),
+        },
+        "comments": grouped,          # each comment has a "replies" sub-list
+        "orphan_replies": orphans,     # replies whose parent wasn't captured
+    }
 
 
-def main():
+# ── Main ─────────────────────────────────────────────────────────────
+
+async def main():
     """Main example function."""
     logger = setup_logging()
     logger.info("🚀 Starting Comment Extraction Example")
-    
-    # Get video URL from user
-    print("\n💬 TikTok Comment Extraction")
-    print("=" * 40)
-    
+
+    print("\n💬 TikTok Comment + Reply Extraction")
+    print("=" * 50)
+
     video_url = input("Enter TikTok video URL: ").strip()
-    
+
     if not video_url:
         print("❌ No URL provided.")
         return
-    
-    # Validate URL
+
     if not ('tiktok.com' in video_url and '/video/' in video_url):
         print("❌ Invalid TikTok video URL format.")
         return
-    
-    # Choose extraction method
-    print("\nChoose extraction method:")
-    print("1. Network Monitoring (Recommended)")
-    print("2. Traditional Scrolling")
-    print("3. Both methods")
-    
-    method_choice = input("Enter choice (1-3): ").strip()
-    
-    driver = None
+
+    print("\nInclude replies? (Y/n): ", end="")
+    reply_choice = input().strip().lower()
+    fetch_replies = reply_choice != 'n'
+
+    scraper = None
     try:
-        # Initialize TTScraper
+        # ── Launch browser ───────────────────────────────────────
         logger.info("🔧 Initializing TTScraper...")
         scraper = TTScraper()
-        driver = scraper.start_driver()
-        
-        results = {}
-        
-        # Network monitoring method
-        if method_choice in ['1', '3']:
-            logger.info("🕸️ Starting network monitoring extraction...")
-            print("🕸️ Extracting comments using network monitoring...")
-            
-            # First capture network requests
-            api_responses = extract_comments_network(video_url, driver)
-            
-            if api_responses:
-                # Process the responses
-                organized_comments = process_comment_responses(video_url, driver)
-                results['network'] = organized_comments
-                
-                # Save network results
-                network_file = save_comments_data(organized_comments, video_url, "network")
-                if network_file:
-                    print(f"✅ Network extraction saved to: {network_file}")
-            else:
-                print("⚠️ No comments captured via network monitoring")
-        
-        # Traditional scrolling method  
-        if method_choice in ['2', '3']:
-            logger.info("📜 Starting traditional scrolling extraction...")
-            print("📜 Extracting comments using traditional scrolling...")
-            try:
-                    # Example video URL for testing
-                    
-                    print(f"Testing video: {video_url}")
-                    import video
-                    # Create video instance
-                    TikTok_video = video.create_video_from_url(video_url, driver)
-                    print(f"Video ID: {TikTok_video.id}")
+        tab = await scraper.start_browser()
 
-                    # Fetch comments using the new navigation method
-                    print("\nFetching comments via API navigation...")
-                    comments = TikTok_video.safe_comments(driver=driver)
-                    
-                    # Convert generator to list to count and process
-                    comment_list = list(comments)
-                    total_comments = len(comment_list)
-                    total_replies = sum(len(comment.get('replies', [])) for comment in comment_list)
-                    total_interactions = total_comments + total_replies
-                    
-                    print(f"\n=== EXTRACTION SUMMARY ===")
-                    print(f"Total main comments: {total_comments}")
-                    print(f"Total replies: {total_replies}")
-                    print(f"Total interactions: {total_interactions}")
-                    print(f"Expected from UI: 113 (if this doesn't match, some comments/replies might not have loaded)")
-                    
-                    for idx, comment in enumerate(comment_list, 1):  # Display comments with index
-                        print(f"\nComment {idx}:")
-                        print(f"  Username: {comment.get('username', 'Unknown')}")
-                        print(f"  User Profile URL: {comment.get('user_profile_url', 'Unknown')}")
-                        print(f"  Avatar URL: {comment.get('avatar_url', 'No avatar')}")
-                        print(f"  Text: {comment.get('text', 'No text')}")
-                        print(f"  Time: {comment.get('time', 'Unknown')}")
-                        print(f"  Like Count: {comment.get('like_count', 0)}")
-                        print(f"  Reply Count: {comment.get('reply_count', 0)}")
-                        print(f"  Comment ID: {comment.get('comment_id', 'Unknown')}")
-                        #print(f"  Badges: {', '.join(comment.get('badges', [])) if comment.get('badges') else 'None'}")
+        # ── Extract comments + replies ───────────────────────────
+        print("\n🔗 Fetching comments" + (" + replies" if fetch_replies else "") + "...")
+        raw_comments, parsed_comments = await extract_comments_api(
+            video_url, tab, fetch_replies=fetch_replies
+        )
 
-                        # Display raw HTML for debugging (optional)
-                        #print(f"  Raw HTML: {comment.get('raw_html', 'No raw HTML available')[:100]}...")  # Truncate for readability
+        if parsed_comments:
+            display_parsed_comments(parsed_comments)
+            print_summary(parsed_comments)
 
-                        # Display replies if available (note: safe_comments uses 'replies' key, not 'reply_comments')
-                        replies = comment.get('replies', [])
-                        if replies:
-                            print(f"  Replies ({len(replies)}):")
-                            for reply_idx, reply in enumerate(replies, 1):
-                                print(f"    Reply {reply_idx}:")
-                                print(f"      Username: {reply.get('username', 'Unknown')}")
-                                print(f"      Text: {reply.get('text', 'No text')}")
-                                print(f"      Like Count: {reply.get('like_count', 0)}")
-                                print(f"      Time: {reply.get('time', 'Unknown')}")
-                                print(f"      TikTok URL: {reply.get('user_profile_url', 'Unknown')}")
-                                print(f"      Avatar URL: {reply.get('avatar_url', 'Unknown')}")
-                                # Show whom this reply is replying to, if available
-                                replied_to = reply.get('reply_to_username') or reply.get('replied_to', 'Unknown')
-                                print(f"      Replied to: {replied_to}")
-                        else:
-                            print(f"  No replies found (expected: {comment.get('reply_count', 0)})")
+            # Save structured (nested) output
+            structured = build_structured_output(video_url, parsed_comments)
+            parsed_file = make_output_filename(video_url, "structured")
+            save_json(structured, parsed_file)
+            print(f"\n💾 Structured output saved to: {parsed_file}")
 
-            except Exception as e:
-                print(f"Error occurred: {e}")
-                import traceback
-                traceback.print_exc()
+            # Save raw API payloads for debugging
+            raw_file = make_output_filename(video_url, "raw")
+            save_json(raw_comments, raw_file)
+            print(f"💾 Raw API data saved to:      {raw_file}")
+        else:
+            print("⚠️  No comments captured")
 
-        
-    
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
-        print(f"❌ An error occurred: {e}")
-    
+        logger.error(f"❌ Fatal error: {e}", exc_info=True)
+        print(f"\n❌ Error: {e}")
+        traceback.print_exc()
+
     finally:
-        # Clean up
-        if driver:
-            try:
-                driver.quit()
-                logger.info("🧹 Browser closed successfully")
-            except:
-                logger.warning("⚠️ Could not close browser cleanly")
+        if scraper:
+            scraper.close()
+            logger.info("🧹 Browser closed")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

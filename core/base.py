@@ -101,38 +101,40 @@ class BaseScrapingMixin:
 
 
 class SessionManager:
-    """Manages browser sessions and their lifecycle."""
+    """Manages browser sessions and their lifecycle using nodriver."""
     
     def __init__(self, config=None):
         from ..config.settings import DEFAULT_CONFIG
         self.config = config or DEFAULT_CONFIG
-        self.driver = None
+        self.scraper = None
+        self.tab = None
         self.logger = logging.getLogger(self.__class__.__name__)
     
-    def start_session(self, **kwargs):
-        """Start a new browser session."""
-        if self.driver is not None:
+    async def start_session(self, **kwargs):
+        """Start a new browser session (async)."""
+        if self.tab is not None:
             self.logger.warning("Session already active, closing existing session")
             self.close_session()
         
         # Import here to avoid circular imports
         from ..browser.driver import EnhancedTTScraper
         
-        scraper = EnhancedTTScraper(self.config)
-        self.driver = scraper.start_driver(**kwargs)
-        return self.driver
+        self.scraper = EnhancedTTScraper(self.config)
+        self.tab = await self.scraper.start_driver(**kwargs)
+        return self.tab
     
     def close_session(self):
         """Close the current session."""
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
+        if self.scraper:
+            self.scraper.close_driver()
+            self.scraper = None
+            self.tab = None
             self.logger.info("Session closed")
     
-    def __enter__(self):
-        """Context manager entry."""
-        return self.start_session()
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return await self.start_session()
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
         self.close_session()

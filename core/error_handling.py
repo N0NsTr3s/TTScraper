@@ -6,7 +6,6 @@ import logging
 from typing import Callable, Any, Optional, Type, Union, List
 from functools import wraps
 import requests
-from selenium.common.exceptions import WebDriverException, TimeoutException
 
 
 class RetryConfig:
@@ -28,10 +27,9 @@ class RetryConfig:
             requests.RequestException,
             requests.Timeout,
             requests.ConnectionError,
-            WebDriverException,
-            TimeoutException,
             ConnectionError,
-            OSError
+            OSError,
+            TimeoutError,
         ]
 
 
@@ -145,14 +143,9 @@ class ErrorHandler:
         else:
             raise NetworkError(f"Network error for URL: {url}: {str(error)}")
     
-    def handle_selenium_error(self, error: Exception, context: str = "") -> None:
-        """Handle Selenium WebDriver errors."""
-        if isinstance(error, TimeoutException):
-            raise TikTokScrapingError(f"Selenium timeout: {context}")
-        elif isinstance(error, WebDriverException):
-            raise TikTokScrapingError(f"WebDriver error: {context}: {str(error)}")
-        else:
-            raise TikTokScrapingError(f"Selenium error: {context}: {str(error)}")
+    def handle_browser_error(self, error: Exception, context: str = "") -> None:
+        """Handle browser automation errors (nodriver)."""
+        raise TikTokScrapingError(f"Browser error: {context}: {str(error)}")
     
     def handle_data_extraction_error(self, error: Exception, data_type: str = "") -> None:
         """Handle data extraction errors."""
